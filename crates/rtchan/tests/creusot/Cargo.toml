@@ -1,0 +1,14 @@
+[package]
+name = "rtchan-proof"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+rtrb = { version = "=0.4.0", default-features = false }
+creusot-std = { version = "=0.13.0", default-features = false }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(creusot)'] }
+
+[workspace]

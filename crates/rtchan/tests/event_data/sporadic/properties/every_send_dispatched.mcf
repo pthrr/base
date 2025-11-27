@@ -1,0 +1,2 @@
+[true*] forall m:Item. [port_send_ok(m)]
+  mu X. ([!port_complete(m)] X && <true> true)

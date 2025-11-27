@@ -1,0 +1,3 @@
+[true*] [port_recv_empty]
+  [(!port_complete_empty)* .
+    ((exists v:Bool. port_recv_ok(sample(v))) || port_recv_empty)] false

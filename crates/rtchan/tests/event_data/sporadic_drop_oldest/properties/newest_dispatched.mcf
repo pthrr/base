@@ -1,0 +1,2 @@
+[true*] [port_send_ok(i3)]
+  mu X. ([!port_complete(i3)] X && <true> true)

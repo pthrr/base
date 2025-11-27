@@ -1,0 +1,229 @@
+version: '3'
+
+tasks:
+  install:
+    desc: Install the Rust components used by CI.
+    cmds:
+      - rustup component add rustfmt
+      - rustup target add thumbv7em-none-eabihf
+
+  fmt:
+    desc: Format the Rust workspace.
+    cmds:
+      - cargo fmt --all
+      - cargo fmt --manifest-path crates/rtchan/tests/creusot/Cargo.toml
+
+  fmt:check:
+    desc: Check Rust formatting.
+    cmds:
+      - cargo fmt --all -- --check
+      - cargo fmt --manifest-path crates/rtchan/tests/creusot/Cargo.toml -- --check
+
+  check:
+    desc: Check all Rust workspace targets and features.
+    cmd: cargo check --workspace --all-targets --all-features
+
+  check:embedded:
+    desc: Check the workspace libraries for the embedded target.
+    cmds:
+      - cargo check --workspace --lib --no-default-features --target thumbv7em-none-eabihf
+      - cargo check --workspace --lib --all-features --target thumbv7em-none-eabihf
+
+  test:
+    desc: Run unit tests, mCRL2 checks, and Creusot verification.
+    cmds:
+      - task: test:unit
+      - task: test:mcrl2
+      - task: test:creusot
+
+  test:unit:
+    desc: Run all Rust unit and documentation tests.
+    cmd: cargo test --workspace --all-features
+
+  test:mcrl2:
+    desc: Check the reusable channel and AADL input port models.
+    cmd: nix develop path:. --command task test:mcrl2:verify
+
+  test:mcrl2:verify:
+    cmds:
+      - mkdir -p target/rtchan-model
+      - task: test:mcrl2:channel
+      - task: test:mcrl2:event:drop-newest
+      - task: test:mcrl2:event:drop-oldest
+      - task: test:mcrl2:event-data:drop-newest
+      - task: test:mcrl2:event-data:drop-oldest
+      - task: test:mcrl2:event-data:sporadic
+      - task: test:mcrl2:event-data:sporadic-drop-oldest
+      - task: test:mcrl2:data
+
+  test:mcrl2:channel:
+    internal: true
+    method: none
+    sources:
+      - crates/rtchan/tests/channel/fifo/properties/*.mcf
+    cmds:
+      - m4 -P crates/rtchan/models/channel.m4 crates/rtchan/tests/channel/fifo/app.m4 > target/rtchan-model/channel.mcrl2
+      - mcrl22lps target/rtchan-model/channel.mcrl2 target/rtchan-model/channel.lps
+      - for: sources
+        task: test:mcrl2:check
+        vars:
+          PROPERTY: '{{.ITEM}}'
+          MODEL: channel
+
+  test:mcrl2:event:drop-newest:
+    internal: true
+    method: none
+    sources:
+      - crates/rtchan/tests/event/drop_newest/properties/*.mcf
+    cmds:
+      - m4 -P crates/rtchan/models/channel.m4 crates/rtchan/models/event_data_input.m4 crates/rtchan/models/event_input.m4 crates/rtchan/tests/event/drop_newest/app.m4 > target/rtchan-model/event_drop_newest.mcrl2
+      - mcrl22lps target/rtchan-model/event_drop_newest.mcrl2 target/rtchan-model/event_drop_newest.lps
+      - for: sources
+        task: test:mcrl2:check
+        vars:
+          PROPERTY: '{{.ITEM}}'
+          MODEL: event_drop_newest
+
+  test:mcrl2:event:drop-oldest:
+    internal: true
+    method: none
+    sources:
+      - crates/rtchan/tests/event/drop_oldest/properties/*.mcf
+    vars:
+      INPUTS: crates/rtchan/models/channel.m4 crates/rtchan/models/event_data_input.m4 crates/rtchan/models/event_input.m4 crates/rtchan/tests/event/drop_oldest/app.m4
+    cmds:
+      - m4 -P {{.INPUTS}} > target/rtchan-model/event_drop_oldest.mcrl2
+      - m4 -P -DAADL_SPEC {{.INPUTS}} > target/rtchan-model/event_drop_oldest_spec.mcrl2
+      - mcrl22lps target/rtchan-model/event_drop_oldest.mcrl2 target/rtchan-model/event_drop_oldest.lps
+      - mcrl22lps target/rtchan-model/event_drop_oldest_spec.mcrl2 target/rtchan-model/event_drop_oldest_spec.lps
+      - for: sources
+        task: test:mcrl2:check
+        vars:
+          PROPERTY: '{{.ITEM}}'
+          MODEL: event_drop_oldest
+      - lps2lts target/rtchan-model/event_drop_oldest.lps target/rtchan-model/event_drop_oldest.lts
+      - lps2lts target/rtchan-model/event_drop_oldest_spec.lps target/rtchan-model/event_drop_oldest_spec.lts
+      - ltscompare -e weak-trace target/rtchan-model/event_drop_oldest.lts target/rtchan-model/event_drop_oldest_spec.lts > target/rtchan-model/event_drop_oldest.result
+      - grep -x true target/rtchan-model/event_drop_oldest.result
+
+  test:mcrl2:event-data:drop-newest:
+    internal: true
+    method: none
+    sources:
+      - crates/rtchan/tests/event_data/drop_newest/properties/*.mcf
+    cmds:
+      - m4 -P crates/rtchan/models/channel.m4 crates/rtchan/models/event_data_input.m4 crates/rtchan/tests/event_data/drop_newest/app.m4 > target/rtchan-model/event_data_drop_newest.mcrl2
+      - mcrl22lps target/rtchan-model/event_data_drop_newest.mcrl2 target/rtchan-model/event_data_drop_newest.lps
+      - for: sources
+        task: test:mcrl2:check
+        vars:
+          PROPERTY: '{{.ITEM}}'
+          MODEL: event_data_drop_newest
+
+  test:mcrl2:event-data:drop-oldest:
+    internal: true
+    method: none
+    sources:
+      - crates/rtchan/tests/event_data/drop_oldest/properties/*.mcf
+    vars:
+      INPUTS: crates/rtchan/models/channel.m4 crates/rtchan/models/event_data_input.m4 crates/rtchan/tests/event_data/drop_oldest/app.m4
+    cmds:
+      - m4 -P {{.INPUTS}} > target/rtchan-model/dropoldest.mcrl2
+      - m4 -P -DAADL_SPEC {{.INPUTS}} > target/rtchan-model/dropoldest_spec.mcrl2
+      - mcrl22lps target/rtchan-model/dropoldest.mcrl2 target/rtchan-model/dropoldest.lps
+      - mcrl22lps target/rtchan-model/dropoldest_spec.mcrl2 target/rtchan-model/dropoldest_spec.lps
+      - for: sources
+        task: test:mcrl2:check
+        vars:
+          PROPERTY: '{{.ITEM}}'
+          MODEL: dropoldest
+      - lps2lts target/rtchan-model/dropoldest.lps target/rtchan-model/dropoldest.lts
+      - lps2lts target/rtchan-model/dropoldest_spec.lps target/rtchan-model/dropoldest_spec.lts
+      - ltscompare -e weak-trace target/rtchan-model/dropoldest.lts target/rtchan-model/dropoldest_spec.lts > target/rtchan-model/dropoldest.result
+      - grep -x true target/rtchan-model/dropoldest.result
+
+  test:mcrl2:event-data:sporadic:
+    internal: true
+    method: none
+    sources:
+      - crates/rtchan/tests/event_data/sporadic/properties/*.mcf
+    cmds:
+      - m4 -P crates/rtchan/models/channel.m4 crates/rtchan/models/event_data_input.m4 crates/rtchan/tests/event_data/sporadic/app.m4 > target/rtchan-model/sporadic.mcrl2
+      - mcrl22lps target/rtchan-model/sporadic.mcrl2 target/rtchan-model/sporadic.lps
+      - for: sources
+        task: test:mcrl2:check
+        vars:
+          PROPERTY: '{{.ITEM}}'
+          MODEL: sporadic
+
+  test:mcrl2:event-data:sporadic-drop-oldest:
+    internal: true
+    method: none
+    sources:
+      - crates/rtchan/tests/event_data/sporadic_drop_oldest/properties/*.mcf
+    vars:
+      INPUTS: crates/rtchan/models/channel.m4 crates/rtchan/models/event_data_input.m4 crates/rtchan/tests/event_data/sporadic_drop_oldest/app.m4
+    cmds:
+      - m4 -P {{.INPUTS}} > target/rtchan-model/sporadic_dropoldest.mcrl2
+      - m4 -P -DAADL_SPEC {{.INPUTS}} > target/rtchan-model/sporadic_dropoldest_spec.mcrl2
+      - mcrl22lps target/rtchan-model/sporadic_dropoldest.mcrl2 target/rtchan-model/sporadic_dropoldest.lps
+      - mcrl22lps target/rtchan-model/sporadic_dropoldest_spec.mcrl2 target/rtchan-model/sporadic_dropoldest_spec.lps
+      - for: sources
+        task: test:mcrl2:check
+        vars:
+          PROPERTY: '{{.ITEM}}'
+          MODEL: sporadic_dropoldest
+      - lps2lts target/rtchan-model/sporadic_dropoldest.lps target/rtchan-model/sporadic_dropoldest.lts
+      - lps2lts target/rtchan-model/sporadic_dropoldest_spec.lps target/rtchan-model/sporadic_dropoldest_spec.lts
+      - ltscompare -e weak-trace target/rtchan-model/sporadic_dropoldest.lts target/rtchan-model/sporadic_dropoldest_spec.lts > target/rtchan-model/sporadic_dropoldest.result
+      - grep -x true target/rtchan-model/sporadic_dropoldest.result
+
+  test:mcrl2:data:
+    internal: true
+    method: none
+    sources:
+      - crates/rtchan/tests/data/sampled/properties/*.mcf
+    vars:
+      INPUTS: crates/rtchan/models/channel.m4 crates/rtchan/models/event_data_input.m4 crates/rtchan/models/data_input.m4 crates/rtchan/tests/data/sampled/app.m4
+    cmds:
+      - m4 -P {{.INPUTS}} > target/rtchan-model/data.mcrl2
+      - m4 -P -DAADL_SPEC {{.INPUTS}} > target/rtchan-model/data_spec.mcrl2
+      - mcrl22lps target/rtchan-model/data.mcrl2 target/rtchan-model/data.lps
+      - mcrl22lps target/rtchan-model/data_spec.mcrl2 target/rtchan-model/data_spec.lps
+      - for: sources
+        task: test:mcrl2:check
+        vars:
+          PROPERTY: '{{.ITEM}}'
+          MODEL: data
+      - lps2lts target/rtchan-model/data.lps target/rtchan-model/data.lts
+      - lps2lts target/rtchan-model/data_spec.lps target/rtchan-model/data_spec.lts
+      - ltscompare -e weak-trace target/rtchan-model/data.lts target/rtchan-model/data_spec.lts > target/rtchan-model/data.result
+      - grep -x true target/rtchan-model/data.result
+
+  test:mcrl2:check:
+    internal: true
+    requires:
+      vars: [PROPERTY, MODEL]
+    cmds:
+      - lps2pbes -f {{.PROPERTY}} target/rtchan-model/{{.MODEL}}.lps target/rtchan-model/check.pbes
+      - pbessolve target/rtchan-model/check.pbes > target/rtchan-model/check.result
+      - grep -x true target/rtchan-model/check.result
+
+  test:creusot:
+    desc: Verify the rtchan production modules with Creusot.
+    cmd: nix develop path:.#proof --command task test:creusot:verify
+
+  test:creusot:verify:
+    dir: crates/rtchan/tests/creusot
+    env:
+      RUSTC_WRAPPER: ''
+      XDG_CONFIG_HOME: '{{.ROOT_DIR}}/target/creusot/xdg'
+    cmd: cargo creusot --span-mode off --erasure-check error
+
+  ci:
+    desc: Run every repository check in sequence.
+    cmds:
+      - task: fmt:check
+      - task: check
+      - task: check:embedded
+      - task: test

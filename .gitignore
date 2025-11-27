@@ -1,0 +1,6 @@
+PLAN.md
+/target
+/crates/rtchan/tests/creusot/target
+/crates/rtchan/tests/creusot/verif
+/crates/rtchan/tests/creusot/.why3find
+/Cargo.lock

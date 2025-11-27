@@ -1,0 +1,3 @@
+[true*] forall v:Bool.
+  [port_recv_ok(sample(v))]
+  [(!port_complete(sample(v)))* . port_complete_empty] false

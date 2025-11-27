@@ -1,0 +1,1 @@
+[true*] forall m:Sample. [port_send_full(m)] false

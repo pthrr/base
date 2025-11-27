@@ -1,0 +1,1 @@
+[true*] forall m:Item. [port_send_full(m)] false

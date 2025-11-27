@@ -1,0 +1,2 @@
+[true*][port_recv_empty]
+  [(!port_complete_empty)* . port_complete(port_tick)] false

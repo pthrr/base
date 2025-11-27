@@ -1,0 +1,2 @@
+<link_send_ok(item_a).link_send_ok(item_b).link_len(2)> true
+&& [link_send_ok(item_a).link_send_ok(item_b).(link_len(0) || link_len(1))] false

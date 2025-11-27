@@ -1,0 +1,9 @@
+[package]
+name = "base"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+base-error = { path = "../base-error" }
+base-macros = { path = "../base-macros" }
+rtchan = { path = "../rtchan" }
