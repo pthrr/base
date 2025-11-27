@@ -1,0 +1,22 @@
+fail_fast: true
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: mixed-line-ending
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+      - id: check-xml
+      - id: end-of-file-fixer
+      - id: check-added-large-files
+
+  - repo: local
+    hooks:
+      - id: task-ci
+        name: task ci
+        entry: task ci
+        language: system
+        files: '(^|/)(Cargo\.toml|.*\.rs)$'
+        pass_filenames: false

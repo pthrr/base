@@ -1,0 +1,14 @@
+[package]
+name = "base"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+doctest = false
+
+[features]
+default = []
+perf = []
+
+[dependencies]
+thiserror = { version = "2", default-features = false }

@@ -1,0 +1,17 @@
+version: '3'
+
+tasks:
+  install:
+    cmds:
+      - rustup component add rustfmt
+      - rustup target add thumbv7em-none-eabihf
+
+  fmt:
+    cmd: cargo fmt --all
+
+  ci:
+    cmds:
+      - cargo fmt --all -- --check
+      - cargo check --all-targets --all-features
+      - cargo check --lib --no-default-features --target thumbv7em-none-eabihf
+      - cargo test --all-features
