@@ -4,3 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
+walkdir = "2"
+regex = "1"
+paste = "1"
