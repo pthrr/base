@@ -6,6 +6,9 @@
 //! Use `HotPathVerifier` with custom checks or `verify_hot_function()` for defaults.
 
 use std::collections::HashSet;
+use std::string::{String, ToString};
+use std::vec::Vec;
+use std::boxed::Box;
 
 /// Check severity: Error (hard fail) or Warning (performance note).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

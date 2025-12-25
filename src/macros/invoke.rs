@@ -1,22 +1,24 @@
 /// Immediately invokes a closure with optional parameters.
-pub macro invoke {
+#[macro_export]
+macro_rules! invoke {
     (move $($param:ident),+ => $body:expr) => {
         (move |$($param),*| $body)($($param),*)
-    },
+    };
     (move $body:expr) => {
         (move || $body)()
-    },
+    };
     ($($param:ident),+ => $body:expr) => {
         (|$($param),*| $body)($($param),*)
-    },
+    };
     ($body:expr) => {
         (|| $body)()
-    },
+    };
 }
 
 #[cfg(test)]
 mod tests {
-    use super::invoke;
+    extern crate alloc;
+    use alloc::string::String;
 
     #[test]
     fn test_invoke_with_params() {

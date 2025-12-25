@@ -1,8 +1,9 @@
-#![feature(decl_macro)]
+#![cfg_attr(not(feature = "perf"), no_std)]
 
 pub mod macros;
+
+#[cfg(feature = "perf")]
 pub mod perf;
 
-// Re-export paste crate for macro expansion
 #[doc(hidden)]
 pub use paste;

@@ -2,11 +2,14 @@
 
 version: '3'
 
-vars:
-  GREETING: Hello, World!
-
 tasks:
   default:
     cmds:
-      - echo "{{.GREETING}}"
+      - task --list-all
     silent: true
+    hidden: true
+
+  test:
+    desc: Run tests for the base crate
+    cmds:
+      - cargo test --target x86_64-unknown-linux-gnu

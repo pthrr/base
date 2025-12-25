@@ -1,15 +1,16 @@
-/// Marks a function as hot path for verification.
-pub macro mark_hot($func:ident) {
-    $crate::paste::paste! {
-        #[used]
-        #[unsafe(link_section = ".hot_funcs")]
-        static [<HOT_FUNC_ $func:upper>]: &str = concat!(module_path!(), "::", stringify!($func), "\0");
-    }
+#[macro_export]
+macro_rules! mark_hot {
+    ($func:ident) => {
+        $crate::paste::paste! {
+            #[used]
+            #[unsafe(link_section = ".hot_funcs")]
+            static [<HOT_FUNC_ $func:upper>]: &str = concat!(module_path!(), "::", stringify!($func), "\0");
+        }
+    };
 }
 
 #[cfg(test)]
 mod tests {
-    use super::mark_hot;
 
     #[test]
     fn test_mark_hot_compiles() {
