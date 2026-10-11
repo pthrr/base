@@ -3,7 +3,8 @@
 //! The two monotone histories record successful sends and receives. Unlike a
 //! queue-length snapshot, each history changes only through its own endpoint,
 //! so these postconditions remain valid when the peer operates concurrently.
-//! The FIFO relation *between* histories remains a separate trusted assumption.
+//! Coupling the two endpoint histories requires a shared-state proof and is
+//! deliberately not asserted by these endpoint-local contracts.
 
 use creusot_std::{logic::Id, prelude::*};
 
@@ -45,7 +46,8 @@ impl<T> ProducerHistory<T> for rtrb::Producer<T> {
 }
 
 pub trait ConsumerHistory<T> {
-    /// Sends published by the peer, as seen at this point in time.
+    /// Published sends observed by this consumer at the operation's
+    /// linearization point. A later receive may observe more sends.
     #[logic]
     fn offered(self) -> Seq<T>;
 
@@ -81,29 +83,6 @@ impl<T> ConsumerHistory<T> for rtrb::Consumer<T> {
     }
 }
 
-/// The relation expected when neither endpoint has an operation in progress.
-#[logic(open)]
-pub fn fifo_pair<T>(producer: rtrb::Producer<T>, consumer: rtrb::Consumer<T>) -> bool {
-    producer.channel_id() == consumer.channel_id()
-        && producer.capacity() == consumer.capacity()
-        && producer.accepted() == consumer.offered()
-        && producer.consumed() == consumer.delivered()
-        && consumer.delivered().len() <= producer.accepted().len()
-        && consumer.delivered()
-            == producer
-                .accepted()
-                .subsequence(0, consumer.delivered().len())
-        && producer.accepted().len() - consumer.delivered().len() <= producer.capacity()
-}
-
-/// Trusted `rtrb` coupling axiom, usable only while both endpoints are borrowed.
-/// Neither endpoint can be mutated through another safe reference during this
-/// observation; the two histories then describe the same quiescent FIFO.
-#[trusted]
-#[requires(producer.channel_id() == consumer.channel_id())]
-#[ensures(fifo_pair(*producer, *consumer))]
-pub fn observe_pair<T>(producer: &rtrb::Producer<T>, consumer: &rtrb::Consumer<T>) {}
-
 extern_spec! {
     impl<T> rtrb::RingBuffer<T> {
         #[requires(capacity > 0usize)]
@@ -118,18 +97,23 @@ extern_spec! {
     }
 
     impl<T> rtrb::Producer<T> {
-        #[ensures(true)]
         fn is_abandoned(&self) -> bool;
 
         #[ensures((^self).capacity() == (*self).capacity())]
         #[ensures((^self).channel_id() == (*self).channel_id())]
+        #[ensures((^self).consumed().len() <= (^self).accepted().len())]
+        #[ensures((^self).consumed()
+            == (^self).accepted().subsequence(0, (^self).consumed().len()))]
+        #[ensures((^self).accepted().len() - (^self).consumed().len() <= (^self).capacity())]
         #[ensures((*self).consumed().len() <= (^self).consumed().len())]
         #[ensures((*self).consumed()
             == (^self).consumed().subsequence(0, (*self).consumed().len()))]
         #[ensures(match result {
             Ok(()) => (^self).accepted() == (*self).accepted().push_back(value),
             Err(rtrb::PushError::Full(back)) =>
-                back == value && (^self).accepted() == (*self).accepted(),
+                back == value && (^self).accepted() == (*self).accepted()
+                    && (*self).accepted().len() - (^self).consumed().len()
+                        == (*self).capacity(),
         })]
         #[ensures((*self).accepted().len() - (*self).consumed().len() < (*self).capacity()
             ==> match result { Ok(()) => true, Err(_) => false })]
@@ -137,24 +121,31 @@ extern_spec! {
     }
 
     impl<T> rtrb::Consumer<T> {
-        #[ensures(true)]
         fn is_abandoned(&self) -> bool;
 
         #[ensures((^self).capacity() == (*self).capacity())]
         #[ensures((^self).channel_id() == (*self).channel_id())]
+        #[ensures((^self).delivered().len() <= (^self).offered().len())]
+        #[ensures((^self).offered().len() - (^self).delivered().len() <= (^self).capacity())]
         #[ensures((*self).offered().len() <= (^self).offered().len())]
         #[ensures((*self).offered()
             == (^self).offered().subsequence(0, (*self).offered().len()))]
+        #[ensures(forall<index: Int> 0 <= index && index < (*self).offered().len()
+            ==> (*self).offered()[index] == (^self).offered()[index])]
         #[ensures(match result {
             Ok(value) => (^self).delivered() == (*self).delivered().push_back(value)
                 && (*self).delivered().len() < (^self).offered().len()
                 && value == (^self).offered()[(*self).delivered().len()],
-            Err(rtrb::PopError::Empty) => (^self).delivered() == (*self).delivered(),
+            Err(rtrb::PopError::Empty) => (^self).delivered() == (*self).delivered()
+                && (^self).offered().len() == (^self).delivered().len(),
         })]
         #[ensures((*self).offered().len() > (*self).delivered().len()
             ==> match result { Ok(_) => true, Err(_) => false })]
         fn pop(&mut self) -> Result<T, rtrb::PopError>;
 
+        // A shared-reference specification cannot update the ghost history
+        // when a concurrent producer publishes. The mutable observation
+        // wrapper in channel.rs supplies that boundary contract.
         #[ensures(result@ <= self.capacity())]
         fn slots(&self) -> usize;
     }

@@ -3,7 +3,7 @@
 #[cfg(creusot)]
 pub mod rtrb_contract;
 
-// Verify the production modules, with rtrb as the trusted dependency.
+// Verify production modules against the trusted rtrb call contracts.
 #[path = "../../../src/channel.rs"]
 mod channel;
 #[path = "../../../src/data_input.rs"]
@@ -14,7 +14,6 @@ mod event_data_input;
 mod event_input;
 
 #[cfg(creusot)]
-pub use channel::prove_accepted_messages_remain_fifo;
 pub use channel::{channel, Receiver, Sender};
 pub use data_input::{DataInput, FrozenData};
 pub use event_data_input::{

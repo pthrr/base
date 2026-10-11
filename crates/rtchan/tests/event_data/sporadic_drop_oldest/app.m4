@@ -8,8 +8,7 @@ m4_dnl AADL_SPEC swaps the ring for the AADL DropOldest queue; the two
 m4_dnl expansions must be weak-trace equivalent.
 sort Item = struct i0 | i1 | i2 | i3;
 
-RTCHAN_CHANNEL(port, Item, 3)
-RTCHAN_EVENT_DATA_INPUT(port, Item, 2)
+RTCHAN_EVENT_DATA_INPUT(port, Item, 2, 3)
 
 act app_caller_notify, app_latch_notify, app_notify,
     app_caller_wait, app_latch_wait, app_wait,
@@ -43,16 +42,15 @@ proc AadlQueue(q: List(Item)) =
   + ((q != []) -> port_queue_recv_ok(head(q)) . AadlQueue(tail(q)))
   + ((q == []) -> port_queue_recv_empty . AadlQueue(q))
   + port_queue_len(#q) . AadlQueue(q);
-m4_define(`QUEUE', `AadlQueue([])')
-', `m4_define(`QUEUE', `RTCHAN_CHANNEL_INIT(port)')')
+m4_define(`PORT', `AadlQueue([]) || RTCHAN_EVENT_DATA_INPUT_ADAPTER_INIT(port)')
+', `m4_define(`PORT', `RTCHAN_EVENT_DATA_INPUT_INIT(port)')')
 
 init hide({port_len, port_recv_ok, port_recv_empty},
-  allow({RTCHAN_CHANNEL_VISIBLE(port), app_notify, app_wait,
+  allow({RTCHAN_EVENT_DATA_INPUT_VISIBLE(port), app_notify, app_wait,
          port_begin, port_end, port_complete, port_complete_empty},
-    comm({RTCHAN_CHANNEL_COMM(port),
+    comm({RTCHAN_EVENT_DATA_INPUT_COMM(port),
           app_caller_notify|app_latch_notify -> app_notify,
           app_caller_wait|app_latch_wait -> app_wait,
           port_input_begin|app_sched_begin|port_source_begin -> port_begin,
           port_input_end|app_sched_end|port_source_end -> port_end},
-      Source([i0, i1, i2, i3], 0, 0, false) || Scheduler || RTCHAN_EVENT_DATA_INPUT_INIT(port)
-        || Latch(false) || QUEUE)));
+      Source([i0, i1, i2, i3], 0, 0, false) || Scheduler || Latch(false) || PORT)));

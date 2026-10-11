@@ -5,8 +5,10 @@ mCRL2 properties. `task test:creusot` runs [Creusot](creusot/README.md) on
 production Rust code. `task test:unit` runs the Rust tests. `task test` runs
 all three; `task ci` also runs formatting and embedded checks.
 
-Each `app.m4` is a closed test application: it composes reusable models with
-source and dispatch processes. The reusable definitions live in [models/](../models/).
+Each `app.m4` is a closed test application. Its expansion uses
+`channel.m4 → port model → app.m4`: the port model owns its channel process;
+the app invokes one port macro and supplies source and dispatch processes.
+The reusable definitions live in [models/](../models/).
 
 | Model | Fixture | Main checks |
 | --- | --- | --- |

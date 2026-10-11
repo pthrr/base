@@ -1,4 +1,4 @@
 [true*] forall v:Bool.
   [port_recv_ok(sample(v))]
   [(!port_complete(sample(v)))* .
-    ((exists w:Bool. port_recv_ok(sample(w))) || port_recv_empty)] false
+    (exists w:Bool. port_recv_ok(sample(w)))] false

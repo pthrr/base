@@ -17,7 +17,24 @@
 #[cfg(creusot)]
 use crate::rtrb_contract::{ConsumerHistory, ProducerHistory};
 #[cfg(creusot)]
-use creusot_std::prelude::{ensures, logic, requires, Seq};
+use creusot_std::prelude::{ensures, logic, requires, trusted, Int, Invariant, Seq};
+
+/// Boundary observation: `rtrb::Consumer::slots` loads the producer's tail.
+/// Its ghost offered history may advance even though `rtrb` takes `&self`.
+#[cfg_attr(creusot, trusted)]
+#[cfg_attr(creusot, ensures((^consumer).capacity() == (*consumer).capacity()))]
+#[cfg_attr(creusot, ensures((^consumer).channel_id() == (*consumer).channel_id()))]
+#[cfg_attr(creusot, ensures((^consumer).delivered() == (*consumer).delivered()))]
+#[cfg_attr(creusot, ensures((*consumer).offered().len() <= (^consumer).offered().len()))]
+#[cfg_attr(creusot, ensures((*consumer).offered()
+    == (^consumer).offered().subsequence(0, (*consumer).offered().len())))]
+#[cfg_attr(creusot, ensures((^consumer).offered().len() - (^consumer).delivered().len()
+    <= (^consumer).capacity()))]
+#[cfg_attr(creusot, ensures(result@ == (^consumer).offered().len()
+    - (^consumer).delivered().len()))]
+fn observe_slots<T>(consumer: &mut Receiver<T>) -> usize {
+    consumer.rx.slots()
+}
 
 #[cfg_attr(
     creusot,
@@ -57,6 +74,32 @@ pub struct Receiver<T> {
     rx: rtrb::Consumer<T>,
 }
 
+#[cfg(creusot)]
+impl<T> Invariant for Sender<T> {
+    #[logic]
+    fn invariant(self) -> bool {
+        pearlite! {
+            self.consumed().len() <= self.accepted().len()
+                && self.consumed()
+                    == self.accepted().subsequence(0, self.consumed().len())
+                && self.accepted().len() - self.consumed().len() <= self.capacity()
+        }
+    }
+}
+
+#[cfg(creusot)]
+impl<T> Invariant for Receiver<T> {
+    #[logic]
+    fn invariant(self) -> bool {
+        pearlite! {
+            self.delivered().len() <= self.offered().len()
+                && self.offered().len() - self.delivered().len() <= self.capacity()
+                && self.delivered()
+                    == self.offered().subsequence(0, self.delivered().len())
+        }
+    }
+}
+
 /// Allocates a bounded channel and returns its unique sender and receiver.
 ///
 /// `cap` must be positive and corresponds to `RTCHAN_CHANNEL` in
@@ -70,8 +113,14 @@ pub struct Receiver<T> {
 /// allocator policy.
 #[cfg_attr(creusot, requires(cap > 0usize))]
 #[cfg_attr(creusot, ensures(result.0.accepted() == Seq::empty()))]
+#[cfg_attr(creusot, ensures(result.0.consumed() == Seq::empty()))]
+#[cfg_attr(creusot, ensures(result.1.offered() == Seq::empty()))]
 #[cfg_attr(creusot, ensures(result.1.delivered() == Seq::empty()))]
+#[cfg_attr(creusot, ensures(result.0.accepted() == result.1.offered()))]
+#[cfg_attr(creusot, ensures(result.0.consumed() == result.1.delivered()))]
 #[cfg_attr(creusot, ensures(result.0.channel_id() == result.1.channel_id()))]
+#[cfg_attr(creusot, ensures(result.0.capacity() == cap@))]
+#[cfg_attr(creusot, ensures(result.1.capacity() == cap@))]
 pub fn channel<T>(cap: usize) -> (Sender<T>, Receiver<T>) {
     assert!(cap > 0, "channel capacity must be positive");
     let (tx, rx) = rtrb::RingBuffer::new(cap);
@@ -97,6 +146,12 @@ impl<T> Sender<T> {
         self.tx.channel_id()
     }
 
+    #[cfg(creusot)]
+    #[logic]
+    pub fn capacity(self) -> Int {
+        self.tx.capacity()
+    }
+
     /// Attempts one send without waiting or allocating.
     ///
     /// `Ok(())` maps to `send_ok(m)`; `Err(m)` maps to `send_full(m)` while both
@@ -109,6 +164,9 @@ impl<T> Sender<T> {
         })
     )]
     #[cfg_attr(creusot, ensures((^self).channel_id() == (*self).channel_id()))]
+    #[cfg_attr(creusot, ensures((^self).capacity() == (*self).capacity()))]
+    #[cfg_attr(creusot, ensures((^self).consumed()
+        == (^self).accepted().subsequence(0, (^self).consumed().len())))]
     pub fn try_send(&mut self, message: T) -> Result<(), T> {
         if self.tx.is_abandoned() {
             return Err(message);
@@ -136,9 +194,29 @@ impl<T> Receiver<T> {
     }
 
     #[cfg(creusot)]
+    #[logic(open)]
+    pub fn pending(self) -> creusot_std::prelude::Int {
+        self.offered().len() - self.delivered().len()
+    }
+
+    /// FIFO values visible at this receiver's latest observation.
+    #[cfg(creusot)]
+    #[logic(open, inline)]
+    pub fn observed_queue(self) -> Seq<T> {
+        self.offered()
+            .subsequence(self.delivered().len(), self.offered().len())
+    }
+
+    #[cfg(creusot)]
     #[logic]
     pub fn channel_id(self) -> creusot_std::logic::Id {
         self.rx.channel_id()
+    }
+
+    #[cfg(creusot)]
+    #[logic]
+    pub fn capacity(self) -> Int {
+        self.rx.capacity()
     }
 
     /// Attempts one receive without waiting or allocating.
@@ -152,7 +230,8 @@ impl<T> Receiver<T> {
             Some(message) => (^self).delivered() == (*self).delivered().push_back(message)
                 && (*self).delivered().len() < (^self).offered().len()
                 && message == (^self).offered()[(*self).delivered().len()],
-            None => (^self).delivered() == (*self).delivered(),
+            None => (^self).delivered() == (*self).delivered()
+                && (^self).offered().len() == (^self).delivered().len(),
         })
     )]
     #[cfg_attr(
@@ -160,7 +239,22 @@ impl<T> Receiver<T> {
         ensures((*self).offered().len() > (*self).delivered().len()
             ==> match result { Some(_) => true, None => false })
     )]
+    #[cfg_attr(
+        creusot,
+        ensures((*self).offered().len() > (*self).delivered().len()
+            ==> match result {
+                Some(message) => message == (*self).offered()[(*self).delivered().len()],
+                None => true,
+            })
+    )]
     #[cfg_attr(creusot, ensures((^self).channel_id() == (*self).channel_id()))]
+    #[cfg_attr(creusot, ensures((^self).capacity() == (*self).capacity()))]
+    #[cfg_attr(creusot, ensures((^self).offered().len() >= (*self).offered().len()))]
+    #[cfg_attr(
+        creusot,
+        ensures(forall<index: Int> 0 <= index && index < (*self).offered().len()
+            ==> (*self).offered()[index] == (^self).offered()[index])
+    )]
     pub fn try_recv(&mut self) -> Option<T> {
         recv_outcome(self.rx.pop())
     }
@@ -170,32 +264,36 @@ impl<T> Receiver<T> {
         self.rx.is_abandoned()
     }
 
-    /// Returns the number of queued messages at the time of the call.
+    /// Returns the number of queued messages at the atomic tail load.
     ///
     /// Maps to `len(n)`. Only the receiver removes messages, so concurrent
     /// sends can only increase the count.
-    pub fn len(&self) -> usize {
-        self.rx.slots()
+    #[cfg_attr(
+        creusot,
+        ensures(result@ == (^self).offered().len() - (^self).delivered().len())
+    )]
+    #[cfg_attr(creusot, ensures(result@ == (^self).observed_queue().len()))]
+    #[cfg_attr(creusot, ensures((^self).capacity() == (*self).capacity()))]
+    #[cfg_attr(creusot, ensures((^self).delivered() == (*self).delivered()))]
+    #[cfg_attr(creusot, ensures((*self).offered().len() <= (^self).offered().len()))]
+    #[cfg_attr(creusot, ensures((*self).offered()
+        == (^self).offered().subsequence(0, (*self).offered().len())))]
+    pub fn len(&mut self) -> usize {
+        observe_slots(self)
     }
 
     /// Returns whether no message was queued at the time of the call.
-    pub fn is_empty(&self) -> bool {
+    #[cfg_attr(
+        creusot,
+        ensures(result == ((^self).offered().len() == (^self).delivered().len()))
+    )]
+    #[cfg_attr(creusot, ensures((^self).capacity() == (*self).capacity()))]
+    #[cfg_attr(creusot, ensures((^self).delivered() == (*self).delivered()))]
+    #[cfg_attr(creusot, ensures((*self).offered().len() <= (^self).offered().len()))]
+    #[cfg_attr(creusot, ensures((*self).offered()
+        == (^self).offered().subsequence(0, (*self).offered().len())))]
+    pub fn is_empty(&mut self) -> bool {
         self.len() == 0
-    }
-}
-
-#[cfg(creusot)]
-pub fn prove_accepted_messages_remain_fifo() {
-    let (mut sender, mut receiver) = channel::<u8>(2);
-    crate::rtrb_contract::observe_pair(&sender.tx, &receiver.rx);
-    let first_sent = sender.try_send(7);
-    let second_sent = sender.try_send(8);
-    if let (Ok(()), Ok(())) = (first_sent, second_sent) {
-        crate::rtrb_contract::observe_pair(&sender.tx, &receiver.rx);
-        let first_received = receiver.try_recv();
-        let second_received = receiver.try_recv();
-        creusot_std::prelude::proof_assert!(first_received == Some(7u8));
-        creusot_std::prelude::proof_assert!(second_received == Some(8u8));
     }
 }
 
@@ -219,6 +317,15 @@ mod tests {
         assert_eq!(tx.try_send(3), Err(3));
         assert_eq!(rx.try_recv(), Some(1));
         assert_eq!(rx.try_recv(), Some(2));
+    }
+
+    #[test]
+    fn separate_length_observations_see_new_sends() {
+        let (mut sender, mut receiver) = channel::<u8>(2);
+        assert_eq!(receiver.len(), 0);
+        sender.try_send(7).unwrap();
+        assert_eq!(receiver.len(), 1);
+        assert!(!receiver.is_empty());
     }
 
     #[test]

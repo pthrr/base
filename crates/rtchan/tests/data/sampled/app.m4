@@ -6,8 +6,7 @@ m4_dnl register that holds the latest value; the two expansions must be
 m4_dnl weak-trace equivalent.
 sort Sample = struct sample(value: Bool);
 
-RTCHAN_CHANNEL(port, Sample, 2)
-RTCHAN_DATA_INPUT(port, Sample)
+RTCHAN_DATA_INPUT(port, Sample, 2)
 
 act port_source_begin, port_source_end, port_begin, port_end;
     port_snap_q, port_snap_r, port_snap: port_Latest # Bool;
@@ -35,16 +34,14 @@ proc Reader =
 m4_define(`PORT', `Register(port_none, false) || Reader')
 m4_define(`PORT_COMM', `port_snap_q|port_snap_r -> port_snap')
 ', `
-m4_define(`PORT', `RTCHAN_CHANNEL_INIT(port) || RTCHAN_DATA_INPUT_INIT(port)')
-m4_define(`PORT_COMM', `port_complete|port_keep -> port_kept,
-    port_complete_empty|port_keep_empty -> port_kept_empty')
+m4_define(`PORT', `RTCHAN_DATA_INPUT_INIT(port)')
 ')
 
-init hide({port_len, port_recv_ok, port_recv_empty, port_kept, port_kept_empty,
-           port_snap},
+init hide({port_len, port_recv_ok, port_recv_empty, port_snap},
   allow({RTCHAN_DATA_INPUT_VISIBLE(port),
-         port_snap, port_frozen, port_begin, port_end},
-    comm({RTCHAN_CHANNEL_COMM(port), PORT_COMM,
+         port_snap, port_begin, port_end},
+    comm({RTCHAN_DATA_INPUT_COMM(port),
+m4_ifdef(`AADL_SPEC', `          port_snap_q|port_snap_r -> port_snap,')
           port_input_begin|port_source_begin -> port_begin,
           port_input_end|port_source_end -> port_end},
       Source(0, 0, false) || PORT)));

@@ -76,7 +76,7 @@ tasks:
     sources:
       - crates/rtchan/tests/event/drop_newest/properties/*.mcf
     cmds:
-      - m4 -P crates/rtchan/models/channel.m4 crates/rtchan/models/event_data_input.m4 crates/rtchan/models/event_input.m4 crates/rtchan/tests/event/drop_newest/app.m4 > target/rtchan-model/event_drop_newest.mcrl2
+      - m4 -P crates/rtchan/models/channel.m4 crates/rtchan/models/event_input.m4 crates/rtchan/tests/event/drop_newest/app.m4 > target/rtchan-model/event_drop_newest.mcrl2
       - mcrl22lps target/rtchan-model/event_drop_newest.mcrl2 target/rtchan-model/event_drop_newest.lps
       - for: sources
         task: test:mcrl2:check
@@ -90,7 +90,7 @@ tasks:
     sources:
       - crates/rtchan/tests/event/drop_oldest/properties/*.mcf
     vars:
-      INPUTS: crates/rtchan/models/channel.m4 crates/rtchan/models/event_data_input.m4 crates/rtchan/models/event_input.m4 crates/rtchan/tests/event/drop_oldest/app.m4
+      INPUTS: crates/rtchan/models/channel.m4 crates/rtchan/models/event_input.m4 crates/rtchan/tests/event/drop_oldest/app.m4
     cmds:
       - m4 -P {{.INPUTS}} > target/rtchan-model/event_drop_oldest.mcrl2
       - m4 -P -DAADL_SPEC {{.INPUTS}} > target/rtchan-model/event_drop_oldest_spec.mcrl2
@@ -184,7 +184,7 @@ tasks:
     sources:
       - crates/rtchan/tests/data/sampled/properties/*.mcf
     vars:
-      INPUTS: crates/rtchan/models/channel.m4 crates/rtchan/models/event_data_input.m4 crates/rtchan/models/data_input.m4 crates/rtchan/tests/data/sampled/app.m4
+      INPUTS: crates/rtchan/models/channel.m4 crates/rtchan/models/data_input.m4 crates/rtchan/tests/data/sampled/app.m4
     cmds:
       - m4 -P {{.INPUTS}} > target/rtchan-model/data.mcrl2
       - m4 -P -DAADL_SPEC {{.INPUTS}} > target/rtchan-model/data_spec.mcrl2

@@ -6,8 +6,9 @@ source. A private implementation relationship keeps them small:
 `EventInput<P>` uses `EventDataInput<(), P>`, and `DataInput<T>` uses
 `EventDataInput<T, DropOldest>` with queue size one. The shared concurrent
 storage is the Rust SPSC [`channel`](src/channel.rs). The [mCRL2 channel](models/channel.m4)
-defines that FIFO separately. Each [input model](models/) composes with it,
-then the user model supplies the source and dispatch schedule.
+defines that FIFO separately. Each [port model](models/) instantiates it and
+defines its own input process. The app instantiates one port and supplies the
+source and dispatch schedule.
 
 | Choice | Reason |
 | --- | --- |

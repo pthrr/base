@@ -18,10 +18,13 @@
 //! assert_eq!((again.get(), again.is_updated()), (Some(&7), false));
 //! ```
 
-use crate::{DropOldest, EventDataInput, FrozenInput, Sender};
+use crate::{DropOldest, EventDataInput, Sender};
 
 #[cfg(creusot)]
-use creusot_std::prelude::{ensures, requires};
+use crate::event_data_input::DispatchObservation;
+
+#[cfg(creusot)]
+use creusot_std::prelude::{ensures, logic, requires, Invariant};
 
 /// Input adapter for one AADL data input port.
 ///
@@ -32,10 +35,20 @@ pub struct DataInput<T> {
     latest: Option<T>,
 }
 
+#[cfg(creusot)]
+impl<T> Invariant for DataInput<T> {
+    #[logic]
+    fn invariant(self) -> bool {
+        pearlite! { !self.input.active && self.input.queue_size == 1usize }
+    }
+}
+
 /// The value frozen for one dispatch.
 pub struct FrozenData<'a, T> {
     value: Option<&'a T>,
     updated: bool,
+    #[cfg(creusot)]
+    observation: DispatchObservation<T>,
 }
 
 impl<T> DataInput<T> {
@@ -52,6 +65,7 @@ impl<T> DataInput<T> {
     /// Panics if `max_sends` is zero.
     #[cfg_attr(creusot, requires(max_sends > 0usize))]
     #[cfg_attr(creusot, ensures(result.1.latest == None))]
+    #[cfg_attr(creusot, ensures(result.0.capacity() == max_sends@))]
     pub fn new(max_sends: usize) -> (Sender<T>, Self) {
         let (sender, input) = EventDataInput::<T, DropOldest>::new(1, max_sends);
         let input = Self {
@@ -63,17 +77,60 @@ impl<T> DataInput<T> {
 
     /// Freezes the latest value sent before the input time.
     ///
-    /// Call this at the AADL input time. The result borrows the input, so no
-    /// later send changes it. Never waits or allocates; drops at most
+    /// Align its length read with the AADL input time. The result borrows the
+    /// input, so no later send changes it. Never waits or allocates; drops at most
     /// `max_sends` older values in place, running their destructors.
+    #[cfg_attr(
+        creusot,
+        ensures(match &(^self).latest {
+            Some(value) => result.value == Some(value),
+            None => result.value == None,
+        })
+    )]
+    #[cfg_attr(creusot, ensures(!result.updated ==> (^self).latest == (*self).latest))]
+    #[cfg_attr(
+        creusot,
+        ensures(result.updated ==
+            (result.observation.observed().len() > result.observation.start_index()))
+    )]
+    #[cfg_attr(
+        creusot,
+        ensures(result.observation.end_index() ==
+            if result.updated { result.observation.selected_index() + 1 }
+            else { result.observation.start_index() })
+    )]
+    #[cfg_attr(
+        creusot,
+        ensures(result.observation.selected_index() == result.observation.start_index()
+            + if result.observation.observed().len() > result.observation.start_index() + 1 {
+                result.observation.observed().len() - result.observation.start_index() - 1
+            } else { 0 })
+    )]
+    #[cfg_attr(
+        creusot,
+        ensures(result.observation.observed().len() > result.observation.start_index() ==>
+            result.updated && match result.value {
+                Some(value) => *value == result.observation.observed()[result.observation.selected_index()],
+                None => false,
+            })
+    )]
+    #[cfg_attr(
+        creusot,
+        ensures(result.updated ==> match result.value {
+            Some(value) => result.observation.selected_index() < result.observation.received().len()
+                && *value == result.observation.received()[result.observation.selected_index()],
+            None => false,
+        })
+    )]
     pub fn dispatch(&mut self) -> FrozenData<'_, T> {
-        // The inner guard completes at once, so the inner dispatch never
-        // reports one in progress.
-        let fresh = self.input.dispatch().ok().and_then(FrozenInput::complete);
+        // The inner adapter freezes and completes this dispatch in one call.
+        let (fresh, _observation) = self.input.dispatch_value();
         let updated = update_latest(&mut self.latest, fresh);
         FrozenData {
             value: self.latest.as_ref(),
             updated,
+            #[cfg(creusot)]
+            observation: _observation,
         }
     }
 

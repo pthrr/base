@@ -2,8 +2,7 @@ m4_dnl Periodic OneItem event input with DropOldest, N = K = 2.
 m4_dnl The ring capacity is N + K - 1 = 3. The source bounds arrivals
 m4_dnl between dispatch windows. AADL_SPEC replaces the ring with a direct
 m4_dnl two-entry DropOldest queue for weak-trace comparison.
-RTCHAN_EVENT_INPUT(port, 2)
-RTCHAN_CHANNEL(port, port_Occurrence, 3)
+RTCHAN_EVENT_INPUT(port, 2, 3)
 
 act port_source_begin, port_source_end, port_begin, port_end;
 
@@ -22,13 +21,13 @@ proc AadlEventQueue(q: List(port_Occurrence)) =
   + ((q != []) -> port_queue_recv_ok(head(q)) . AadlEventQueue(tail(q)))
   + ((q == []) -> port_queue_recv_empty . AadlEventQueue(q))
   + port_queue_len(#q) . AadlEventQueue(q);
-m4_define(`QUEUE', `AadlEventQueue([])')
-', `m4_define(`QUEUE', `RTCHAN_CHANNEL_INIT(port)')')
+m4_define(`PORT', `AadlEventQueue([]) || RTCHAN_EVENT_INPUT_ADAPTER_INIT(port)')
+', `m4_define(`PORT', `RTCHAN_EVENT_INPUT_INIT(port)')')
 
 init hide({port_len, port_recv_ok, port_recv_empty},
-  allow({RTCHAN_CHANNEL_VISIBLE(port), port_begin, port_end,
+  allow({RTCHAN_EVENT_INPUT_VISIBLE(port), port_begin, port_end,
          port_complete, port_complete_empty},
-    comm({RTCHAN_CHANNEL_COMM(port),
+    comm({RTCHAN_EVENT_INPUT_COMM(port),
           port_input_begin|port_source_begin -> port_begin,
           port_input_end|port_source_end -> port_end},
-      Source(0, 0, false) || RTCHAN_EVENT_INPUT_INIT(port) || QUEUE)));
+      Source(0, 0, false) || PORT)));

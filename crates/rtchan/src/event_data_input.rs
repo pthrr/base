@@ -11,17 +11,41 @@
 use core::marker::PhantomData;
 
 #[cfg(creusot)]
-use creusot_std::prelude::{ensures, requires};
+use creusot_std::prelude::{
+    ensures, invariant, logic, requires, snapshot, Int, Invariant, Seq, Snapshot,
+};
 
 use crate::{channel, Receiver, Sender};
 
+/// The AADL pending queue at input time, derived from the observed FIFO.
+#[cfg(creusot)]
+#[logic(open, inline)]
+fn aadl_pending<T>(observed: Seq<T>, delivered: Int, queue_size: Int, drop_oldest: bool) -> Seq<T> {
+    let count = observed.len() - delivered;
+    let discarded = if drop_oldest && count > queue_size {
+        count - queue_size
+    } else {
+        0
+    };
+    observed.subsequence(delivered + discarded, observed.len())
+}
+
 mod sealed {
-    use crate::Receiver;
+    #[cfg(creusot)]
+    use creusot_std::prelude::ensures;
 
     /// Implemented only by the overflow policies of this module.
     pub trait Sealed {
-        /// Returns how many queued events a dispatch drops before freezing one.
-        fn excess<T>(receiver: &Receiver<T>, queue_size: usize) -> usize;
+        const DROP_OLDEST: bool;
+
+        /// Returns how many observed events a dispatch drops before freezing one.
+        #[cfg_attr(
+            creusot,
+            ensures(result@ == if Self::DROP_OLDEST && count@ > queue_size@ {
+                count@ - queue_size@
+            } else { 0 })
+        )]
+        fn excess(count: usize, queue_size: usize) -> usize;
     }
 }
 
@@ -41,16 +65,25 @@ pub struct DropNewest;
 pub struct DropOldest;
 
 impl sealed::Sealed for DropNewest {
-    fn excess<T>(_: &Receiver<T>, _: usize) -> usize {
+    const DROP_OLDEST: bool = false;
+
+    #[cfg_attr(creusot, ensures(result == 0usize))]
+    fn excess(_count: usize, _: usize) -> usize {
         0
     }
 }
 
 impl sealed::Sealed for DropOldest {
-    fn excess<T>(receiver: &Receiver<T>, queue_size: usize) -> usize {
-        // When events are queued, this read is the input time: the dispatch
-        // freezes one that is already present.
-        trim_count(receiver.len(), queue_size)
+    const DROP_OLDEST: bool = true;
+
+    #[cfg_attr(
+        creusot,
+        ensures(result@ == if count@ > queue_size@ {
+            count@ - queue_size@
+        } else { 0 })
+    )]
+    fn excess(count: usize, queue_size: usize) -> usize {
+        trim_count(count, queue_size)
     }
 }
 
@@ -76,10 +109,68 @@ pub struct EventDataInput<T, P> {
     policy: PhantomData<P>,
 }
 
+#[cfg(creusot)]
+impl<T, P> Invariant for EventDataInput<T, P> {
+    #[logic]
+    fn invariant(self) -> bool {
+        pearlite! {
+            self.queue_size > 0usize && self.receiver.capacity() >= self.queue_size@
+        }
+    }
+}
+
 /// A dispatch is still active because its frozen guard was forgotten.
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(not(creusot), derive(PartialEq, Eq))]
 pub struct DispatchInProgress;
+
+/// Proof-only record of the FIFO observations made by an internal dispatch.
+pub(crate) struct DispatchObservation<T> {
+    #[cfg(creusot)]
+    observed: Snapshot<Seq<T>>,
+    #[cfg(creusot)]
+    received: Snapshot<Seq<T>>,
+    #[cfg(creusot)]
+    start: Snapshot<Int>,
+    #[cfg(creusot)]
+    selected: Snapshot<Int>,
+    #[cfg(creusot)]
+    end: Snapshot<Int>,
+    #[cfg(not(creusot))]
+    marker: PhantomData<T>,
+}
+
+impl<T> DispatchObservation<T> {
+    #[cfg(creusot)]
+    #[logic]
+    pub fn observed(self) -> Seq<T> {
+        *self.observed
+    }
+
+    #[cfg(creusot)]
+    #[logic]
+    pub fn received(self) -> Seq<T> {
+        *self.received
+    }
+
+    #[cfg(creusot)]
+    #[logic]
+    pub fn start_index(self) -> Int {
+        *self.start
+    }
+
+    #[cfg(creusot)]
+    #[logic]
+    pub fn selected_index(self) -> Int {
+        *self.selected
+    }
+
+    #[cfg(creusot)]
+    #[logic]
+    pub fn end_index(self) -> Int {
+        *self.end
+    }
+}
 
 impl<T> EventDataInput<T, DropNewest> {
     /// Allocates a `DropNewest` connection with AADL `Queue_Size` `queue_size`.
@@ -93,6 +184,7 @@ impl<T> EventDataInput<T, DropNewest> {
     #[cfg_attr(creusot, requires(queue_size > 0usize))]
     #[cfg_attr(creusot, ensures(result.1.queue_size == queue_size))]
     #[cfg_attr(creusot, ensures(!result.1.active))]
+    #[cfg_attr(creusot, ensures(result.0.capacity() == queue_size@))]
     pub fn new(queue_size: usize) -> (Sender<T>, Self) {
         assert!(queue_size > 0, "queue size must be positive");
         let (sender, receiver) = channel(queue_size);
@@ -120,6 +212,12 @@ impl<T> EventDataInput<T, DropOldest> {
     #[cfg_attr(creusot, requires(queue_size@ + max_sends@ - 1 <= usize::MAX@))]
     #[cfg_attr(creusot, ensures(result.1.queue_size == queue_size))]
     #[cfg_attr(creusot, ensures(!result.1.active))]
+    #[cfg_attr(creusot, ensures(result.0.capacity() == queue_size@ + max_sends@ - 1))]
+    #[cfg_attr(
+        creusot,
+        ensures(forall<queued: Int> 0 <= queued && queued < queue_size@
+            ==> queued + max_sends@ <= result.0.capacity())
+    )]
     pub fn new(queue_size: usize, max_sends: usize) -> (Sender<T>, Self) {
         assert!(queue_size > 0, "queue size must be positive");
         assert!(max_sends > 0, "send bound must be positive");
@@ -132,6 +230,14 @@ impl<T> EventDataInput<T, DropOldest> {
 }
 
 impl<T, P: Overflow> EventDataInput<T, P> {
+    #[cfg(creusot)]
+    #[logic]
+    pub fn pending(self) -> Int {
+        self.receiver.pending()
+    }
+
+    #[cfg_attr(creusot, requires(queue_size > 0usize))]
+    #[cfg_attr(creusot, requires(receiver.capacity() >= queue_size@))]
     #[cfg_attr(creusot, ensures(result.queue_size == queue_size))]
     #[cfg_attr(creusot, ensures(!result.active))]
     fn with_receiver(receiver: Receiver<T>, queue_size: usize) -> Self {
@@ -145,28 +251,250 @@ impl<T, P: Overflow> EventDataInput<T, P> {
 
     /// Freezes exactly one input for this dispatch.
     ///
-    /// Call this at the AADL input time. The returned guard holds the result
-    /// so later arrivals cannot change what this dispatch sees. It borrows
+    /// Align its length read with the AADL input time. The returned guard
+    /// holds the result so later arrivals cannot change what this dispatch sees. It borrows
     /// the adapter until completion. A forgotten guard leaves the adapter
     /// active and prevents another receive.
     ///
-    /// The input time falls inside this call. Under `DropOldest` with events
-    /// queued, it is the length read; otherwise it is the freezing receive.
+    /// The input time is the length read inside this call for either policy.
     /// `DropOldest` drops at most `max_sends - 1` older events in place,
     /// running their destructors.
+    #[cfg_attr(
+        creusot,
+        ensures(match result {
+            Ok(guard) => !(*self).active
+                && guard.frozen() == aadl_pending(
+                    guard.observed(), guard.start_index(), (*self).queue_size@,
+                    P::DROP_OLDEST).get(0)
+                && (forall<index: Int> 0 <= index && index < guard.observed().len()
+                    ==> guard.received()[index] == guard.observed()[index])
+                && (match guard.frozen() { Some(_) => true, None => false })
+                    == (guard.observed().len() > guard.start_index())
+                && guard.end_index() == if guard.observed().len() > guard.start_index() {
+                    guard.selected_index() + 1
+                } else { guard.start_index() }
+                && guard.selected_index() == guard.start_index()
+                    + if P::DROP_OLDEST
+                        && guard.observed().len() - guard.start_index() > (*self).queue_size@ {
+                        guard.observed().len() - guard.start_index() - (*self).queue_size@
+                    } else { 0 }
+                && (guard.observed().len() > guard.start_index() ==>
+                    guard.selected_index() < guard.observed().len()
+                    && guard.frozen() == Some(guard.observed()[guard.selected_index()]))
+                && match guard.frozen() {
+                    Some(value) => guard.selected_index() < guard.received().len()
+                        && value == guard.received()[guard.selected_index()],
+                    None => guard.observed().len() == guard.selected_index(),
+                },
+            Err(_) => (*self).active,
+        })
+    )]
+    #[cfg_attr(
+        creusot,
+        ensures(match result {
+            Ok(guard) => guard.queue_size() == (*self).queue_size,
+            Err(_) => (^self).queue_size == (*self).queue_size,
+        })
+    )]
     pub fn dispatch(&mut self) -> Result<FrozenInput<'_, T, P>, DispatchInProgress> {
-        if self.active {
-            return Err(DispatchInProgress);
-        }
-        for _ in 0..P::excess(&self.receiver, self.queue_size) {
-            drop(self.receiver.try_recv());
-        }
-        let value = self.receiver.try_recv();
-        self.active = true;
+        let (value, _observation) = self.freeze()?;
         Ok(FrozenInput {
             adapter: self,
             value,
+            #[cfg(creusot)]
+            observed: _observation.observed,
+            #[cfg(creusot)]
+            received: _observation.received,
+            #[cfg(creusot)]
+            start: _observation.start,
+            #[cfg(creusot)]
+            selected: _observation.selected,
+            #[cfg(creusot)]
+            end: _observation.end,
         })
+    }
+
+    #[cfg_attr(creusot, ensures((^self).queue_size == (*self).queue_size))]
+    #[cfg_attr(creusot, ensures(match result {
+        Ok((value, observation)) => !(*self).active
+            && (^self).active
+            && value == aadl_pending(
+                observation.observed(), observation.start_index(), (*self).queue_size@,
+                P::DROP_OLDEST).get(0)
+            && (forall<index: Int> 0 <= index && index < observation.observed().len()
+                ==> observation.received()[index] == observation.observed()[index])
+            && (^self).receiver.observed_queue()
+                == observation.observed().subsequence(
+                    observation.end_index(), observation.observed().len())
+                    .concat(observation.received().subsequence(
+                        observation.observed().len(), observation.received().len()))
+            && (match value { Some(_) => true, None => false })
+                == (observation.observed().len() > observation.start_index())
+            && observation.end_index() == if observation.observed().len() > observation.start_index() {
+                observation.selected_index() + 1
+            } else { observation.start_index() }
+            && observation.selected_index() == observation.start_index()
+                + if P::DROP_OLDEST
+                    && observation.observed().len() - observation.start_index() > (*self).queue_size@ {
+                    observation.observed().len() - observation.start_index() - (*self).queue_size@
+                } else { 0 }
+            && (observation.observed().len() > observation.start_index() ==>
+                observation.selected_index() < observation.observed().len()
+                && value == Some(observation.observed()[observation.selected_index()]))
+            && match value {
+                Some(value) => observation.selected_index() < observation.received().len()
+                    && value == observation.received()[observation.selected_index()],
+                None => observation.observed().len() == observation.selected_index(),
+            },
+        Err(_) => (*self).active,
+    }))]
+    fn freeze(&mut self) -> Result<(Option<T>, DispatchObservation<T>), DispatchInProgress> {
+        if self.active {
+            return Err(DispatchInProgress);
+        }
+        let count = self.receiver.len();
+        let mut excess = P::excess(count, self.queue_size);
+        #[cfg(creusot)]
+        let observed = snapshot!(self.receiver.offered());
+        #[cfg(creusot)]
+        let delivered_before = snapshot!(self.receiver.delivered().len());
+        #[cfg(creusot)]
+        let original_excess = snapshot!(excess@);
+        #[cfg_attr(
+            creusot,
+            invariant(self.receiver.capacity() >= self.queue_size@)
+        )]
+        #[cfg_attr(creusot, invariant(excess@ == 0 || self.receiver.pending() >= excess@))]
+        #[cfg_attr(
+            creusot,
+            invariant(self.receiver.delivered().len()
+                == *delivered_before + *original_excess - excess@)
+        )]
+        #[cfg_attr(
+            creusot,
+            invariant(self.receiver.offered().len() >= observed.len())
+        )]
+        #[cfg_attr(
+            creusot,
+            invariant(forall<index: Int> 0 <= index && index < observed.len()
+                ==> self.receiver.offered()[index] == observed[index])
+        )]
+        #[cfg_attr(
+            creusot,
+            invariant(*delivered_before + *original_excess < observed.len() ==>
+                self.receiver.offered()[*delivered_before + *original_excess]
+                    == observed[*delivered_before + *original_excess])
+        )]
+        while excess > 0 {
+            let dropped = self.receiver.try_recv();
+            #[cfg(creusot)]
+            creusot_std::prelude::proof_assert!(match dropped {
+                Some(_) => true,
+                None => false,
+            });
+            drop(dropped);
+            excess -= 1;
+        }
+        let value = if count == 0 {
+            None
+        } else {
+            self.receiver.try_recv()
+        };
+        #[cfg(creusot)]
+        let received = snapshot!(self.receiver.offered());
+        #[cfg(creusot)]
+        creusot_std::prelude::proof_assert!(
+            *delivered_before + *original_excess < observed.len()
+                ==> value == Some(observed[*delivered_before + *original_excess])
+        );
+        self.active = true;
+        Ok((
+            value,
+            DispatchObservation {
+                #[cfg(creusot)]
+                observed,
+                #[cfg(creusot)]
+                received,
+                #[cfg(creusot)]
+                start: delivered_before,
+                #[cfg(creusot)]
+                selected: snapshot!(*delivered_before + *original_excess),
+                #[cfg(creusot)]
+                end: snapshot!(self.receiver.delivered().len()),
+                #[cfg(not(creusot))]
+                marker: PhantomData,
+            },
+        ))
+    }
+
+    /// Completes an internal dispatch before returning its value to the data port.
+    #[cfg_attr(creusot, requires(!self.active))]
+    #[cfg_attr(creusot, ensures(!(^self).active))]
+    #[cfg_attr(creusot, ensures((^self).queue_size == (*self).queue_size))]
+    #[cfg_attr(
+        creusot,
+        ensures(forall<index: Int> 0 <= index && index < result.1.observed().len()
+            ==> result.1.received()[index] == result.1.observed()[index])
+    )]
+    #[cfg_attr(
+        creusot,
+        ensures(result.1.selected_index() == result.1.start_index()
+            + if P::DROP_OLDEST
+                && result.1.observed().len() - result.1.start_index() > (*self).queue_size@ {
+                result.1.observed().len() - result.1.start_index() - (*self).queue_size@
+            } else { 0 })
+    )]
+    #[cfg_attr(creusot, ensures(result.0 == aadl_pending(
+        result.1.observed(), result.1.start_index(), (*self).queue_size@,
+        P::DROP_OLDEST).get(0)))]
+    #[cfg_attr(
+        creusot,
+        ensures((match result.0 { Some(_) => true, None => false })
+            == (result.1.observed().len() > result.1.start_index()))
+    )]
+    #[cfg_attr(
+        creusot,
+        ensures(result.1.end_index() == if result.1.observed().len() > result.1.start_index() {
+            result.1.selected_index() + 1
+        } else { result.1.start_index() })
+    )]
+    #[cfg_attr(
+        creusot,
+        ensures(result.1.observed().len() > result.1.start_index() ==>
+            result.1.selected_index() < result.1.observed().len()
+                && result.0 == Some(result.1.observed()[result.1.selected_index()]))
+    )]
+    #[cfg_attr(
+        creusot,
+        ensures(match result.0 {
+            Some(value) => result.1.selected_index() < result.1.received().len()
+                && value == result.1.received()[result.1.selected_index()],
+            None => result.1.observed().len() == result.1.selected_index(),
+        })
+    )]
+    pub(crate) fn dispatch_value(&mut self) -> (Option<T>, DispatchObservation<T>) {
+        let (value, observation) = match self.freeze() {
+            Ok((value, observation)) => (value, observation),
+            Err(_) => {
+                let observation = DispatchObservation {
+                    #[cfg(creusot)]
+                    observed: snapshot!(Seq::empty()),
+                    #[cfg(creusot)]
+                    received: snapshot!(Seq::empty()),
+                    #[cfg(creusot)]
+                    start: snapshot!(0),
+                    #[cfg(creusot)]
+                    selected: snapshot!(0),
+                    #[cfg(creusot)]
+                    end: snapshot!(0),
+                    #[cfg(not(creusot))]
+                    marker: PhantomData,
+                };
+                (None, observation)
+            }
+        };
+        self.active = false;
+        (value, observation)
     }
 
     /// Returns whether a dispatch now would freeze an event.
@@ -174,8 +502,9 @@ impl<T, P: Overflow> EventDataInput<T, P> {
     /// A sporadic scheduler calls this after each wakeup and dispatches while
     /// it returns `true`. Only this adapter removes events, so the answer
     /// stays `true` until the next dispatch. Maps to `len(n)` with `n > 0`.
-    pub fn has_pending(&self) -> bool {
-        !self.receiver.is_empty()
+    #[cfg_attr(creusot, ensures(result == ((^self).pending() > 0)))]
+    pub fn has_pending(&mut self) -> bool {
+        self.receiver.len() > 0
     }
 
     /// Returns whether the sender has been dropped.
@@ -192,9 +521,61 @@ impl<T, P: Overflow> EventDataInput<T, P> {
 pub struct FrozenInput<'a, T, P> {
     adapter: &'a mut EventDataInput<T, P>,
     value: Option<T>,
+    #[cfg(creusot)]
+    observed: Snapshot<Seq<T>>,
+    #[cfg(creusot)]
+    received: Snapshot<Seq<T>>,
+    #[cfg(creusot)]
+    start: Snapshot<Int>,
+    #[cfg(creusot)]
+    selected: Snapshot<Int>,
+    #[cfg(creusot)]
+    end: Snapshot<Int>,
 }
 
 impl<T, P> FrozenInput<'_, T, P> {
+    #[cfg(creusot)]
+    #[logic]
+    pub fn queue_size(self) -> usize {
+        self.adapter.queue_size
+    }
+
+    #[cfg(creusot)]
+    #[logic]
+    pub fn observed(self) -> Seq<T> {
+        *self.observed
+    }
+
+    #[cfg(creusot)]
+    #[logic]
+    pub fn received(self) -> Seq<T> {
+        *self.received
+    }
+
+    #[cfg(creusot)]
+    #[logic]
+    pub fn selected_index(self) -> Int {
+        *self.selected
+    }
+
+    #[cfg(creusot)]
+    #[logic]
+    pub fn end_index(self) -> Int {
+        *self.end
+    }
+
+    #[cfg(creusot)]
+    #[logic]
+    pub fn start_index(self) -> Int {
+        *self.start
+    }
+
+    #[cfg(creusot)]
+    #[logic]
+    pub fn frozen(self) -> Option<T> {
+        self.value
+    }
+
     /// Reads the frozen input without removing it.
     ///
     /// Corresponds to AADL `Get_Value`.
@@ -213,12 +594,22 @@ impl<T, P> FrozenInput<'_, T, P> {
     ///
     /// The caller can dispose of the value outside the real-time path if its
     /// destructor is not bounded. This method does not allocate or wait.
+    #[cfg_attr(creusot, ensures(result == self.frozen()))]
+    #[cfg_attr(
+        creusot,
+        ensures((^self.adapter).queue_size == (*self.adapter).queue_size)
+    )]
     pub fn complete(mut self) -> Option<T> {
         self.value.take()
     }
 }
 
 impl<T, P> Drop for FrozenInput<'_, T, P> {
+    #[cfg_attr(creusot, ensures(!(^self).adapter.active))]
+    #[cfg_attr(
+        creusot,
+        ensures((^self).adapter.queue_size == (*self).adapter.queue_size)
+    )]
     fn drop(&mut self) {
         self.adapter.active = false;
     }
